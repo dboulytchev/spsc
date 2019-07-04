@@ -1,0 +1,7 @@
+add (Z, x) = x;
+add (S (y), x) = S (add (y, x));
+
+if (True, x, y) = x;
+if (False, x, y) = y;
+
+add (S (S (S (Z))), S (S (S (Z))))

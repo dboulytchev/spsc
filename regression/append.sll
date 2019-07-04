@@ -1,0 +1,6 @@
+append(Nil, vs) = vs;
+append(Cons(u, us), vs) = Cons(u, append(us, vs));
+
+append3(xs, ys, zs) = append(append(xs, ys), zs);
+
+append (Cons (A, Nil), Cons (B, Nil))
