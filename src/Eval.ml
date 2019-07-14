@@ -9,8 +9,8 @@ let rec eval env = function
 | Expr.Call (f, (x::xs as args)) ->
    let v = eval env x in
    (match env#lookupDef f v with
-    | `F (fargs, body)       -> eval (env#bind  fargs (List.map (fun a -> env, a) args)) body
-    | `G (fargs, body, env') -> eval (env'#bind fargs (List.map (fun a -> env', a) xs  )) body      
+    | `F (fargs, body)       -> eval (env #bind fargs (Environment.couple env  args)) body
+    | `G (fargs, body, env') -> eval (env'#bind fargs (Environment.couple env' xs  )) body      
    )
 
 let show_value v =
@@ -25,10 +25,8 @@ let show_value v =
   inner v;
   Buffer.contents buf
 
-class env ((defs, _) : Ast.t) = 
-object (self : 'self)
-     
-  val vars = []
+class env ((defs, _) as ast : Ast.t) = 
+object (self : 'self) inherit Environment.env ast
            
   method lookupDef f (ctor, args) =
     try 
@@ -46,21 +44,6 @@ object (self : 'self)
         [`F of _ | `G of _])
     with Not_found ->
       invalid_arg (Printf.sprintf "Undefined function '%s' (or undefined case '%s')" f ctor) 
-                                  
-  method lookup x =
-    try List.assoc x vars with Not_found ->
-      try
-        let Definition.F (_, _, e) = List.find (function Definition.F (f, [], _) when f = x -> true | _ -> false) defs in
-        ({< vars = [] >}, e) 
-      with Not_found -> invalid_arg (Printf.sprintf "Undefined name %s" x)
-                      
-  method bind fargs args =
-    if List.length fargs <> List.length args
-    then invalid_arg "Wrong number of arguments"
-    else {< vars = List.combine fargs args @ vars >}
-
-  method show =
-    "<env>"
     
 end
 
