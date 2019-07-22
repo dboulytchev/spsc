@@ -18,7 +18,7 @@ let parse infile =
     (ostap (!(Ast.parse) -EOF))
 
 let main =
-  try
+  (* try *)
     let mode   = Sys.argv.(1) in
     let infile = Sys.argv.(2) in    
     match parse infile with
@@ -34,5 +34,6 @@ let main =
         | "-i" -> Printf.printf "%s\n" (Eval.show_value @@ Eval.eval (new Eval.env prog) expr)
        )
     | `Fail er -> Printf.eprintf "Error: %s\n" er
-  with Invalid_argument _ ->
+(*  with Invalid_argument _ ->
     Printf.printf "Usage: spsc <input file.sll>\n"
+ *)

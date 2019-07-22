@@ -1,0 +1,10 @@
+neg(True)=False;
+neg(False)=True;
+
+and(True,x)=x;
+and(False,x)=False;
+
+or(True,x)=True;
+or(False,x)=x;
+
+and(x, neg (x))

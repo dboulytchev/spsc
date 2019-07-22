@@ -1,0 +1,4 @@
+add (Z, x) = x;
+add (S (y), x) = S (add (y, x));
+
+add (add (a, b), c)

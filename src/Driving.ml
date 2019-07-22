@@ -7,9 +7,10 @@ type 'env conf = 'env * 'env context * Expr.t
                
 type 'env node =
 | Var    of string
-| Ctor   of string * 'env node list
-| Unfold of Expr.t Lazy.t * 'env node
-| Assume of Expr.t Lazy.t * string * 'env node list
+| Ctor   of string * 'env node Lazy.t list
+| Unfold of Expr.t Lazy.t * 'env node Lazy.t
+| Assume of Expr.t Lazy.t * string * 'env node Lazy.t list
+| Rename of Expr.t Lazy.t * 'env node 
 
 let expand_conf (env, context, expr) =
   lazy (
@@ -31,32 +32,60 @@ let expand_conf (env, context, expr) =
     unfold (fun _ -> expand_expr env expr) context
   )
 
-let rec drive stack context (env, expr) =
-  let conf   = (env, context, expr) in
-  let stack' = conf :: stack in
-  match expr with    
-  | Expr.Var x ->
-     if env#bound x
-     then drive stack' context (env#lookup x)
-     else
-       (match context with
-        | Top -> Var x
-        | G (g, args, env, context') ->
-           Assume (expand_conf conf, x, List.map (fun env -> drive stack' (G (g, args, env, context')) (env, expr)) (env#assume g x))
-       )
-       
-  | Expr.Ctor (c, args) ->
-     (match context with
-      | Top -> Ctor (c, List.map (fun a -> drive stack Top (env, a)) args)
-      | G (g, ys, env', context') ->
-         let env'', fargs, body = env#lookupCase g c (Environment.couple env args) in
-         Unfold (expand_conf conf, drive stack' context' (env''#bind fargs (Environment.couple env' ys), body))
-     )
+let fix f =
+  let x = Pervasives.ref (Var "") in
+  let m = f x in
+  x := m;
+  m
+
+let rec renames lower = function
+| [] -> None
+| lnode :: stack ->
+   match lnode with 
+   | (Unfold (upper, _) | Assume (upper, _, _)) as node ->
+      (match Ast.renames lower (Lazy.force upper) with
+       | Some _ -> Some node
+       | _      -> renames lower stack
+      )
+   | _ -> renames lower stack
     
-  | Expr.Call (f, (x :: xs as args)) ->
-     (match env#lookupDef f with
-      | `F (fargs, body) -> Unfold (expand_conf conf, drive stack' context (env#bind fargs (Environment.couple env args), body))
-      | `G -> drive stack (G (f, xs, env, context)) (env, x)
+let rec drive stack context (env, expr) =
+  let conf = expand_conf (env, context, expr) in
+  match renames (Lazy.force conf) stack with
+  | Some node -> Rename (conf, node)
+  | None ->
+     (match expr with    
+     | Expr.Var x ->
+        if env#bound x
+        then drive stack context (env#lookup x)
+        else
+          (match context with
+           | Top -> Var x
+           | G (g, args, env, context') ->
+              fix (fun self ->
+                Assume (conf, x, List.map (fun env -> lazy (drive (!self :: stack) (G (g, args, env, context')) (env, expr))) (env#assume g x))
+              )
+          )
+       
+     | Expr.Ctor (c, args) ->
+        (match context with
+         | Top -> Ctor (c, List.map (fun a -> lazy (drive stack Top (env, a))) args)
+         | G (g, ys, env', context') ->
+            let env'', fargs, body = env#lookupCase g c (Environment.couple env args) in
+            fix (fun self ->
+              Unfold (conf, lazy (drive (!self :: stack) context' (env''#bind fargs (Environment.couple env' ys), body)))
+            )
+        )
+
+     | Expr.Call (f, args) ->
+        (match env#lookupDef f with
+         | `F (fargs, body) ->
+            fix (fun self ->
+              Unfold (conf, lazy (drive (!self :: stack) context (env#bind fargs (Environment.couple env args), body)))
+            )
+         
+         | `G -> let x::xs = args in drive stack (G (f, xs, env, context)) (env, x)
+        )
      )
      
 class env ((defs, _) as ast : Ast.t) = 
@@ -104,20 +133,22 @@ end
 let drive ((_, expr) as t) = drive [] Top (new env t, expr)
 
 let to_graph root =
-  let buf   = Buffer.create 1024 in
-  let add s = Buffer.add_string buf s in
+  let node_id node = (Obj.magic node : int) in
+  let buf          = Buffer.create 1024 in
+  let add s        = Buffer.add_string buf s in
   let rec inner node =    
-    let current = string_of_int @@ Hashtbl.hash node in
+    let current = string_of_int @@ node_id node in
     let add_edges ns =
-      List.iter (fun n -> add "  "; add current; add " -> "; add @@ string_of_int @@ Hashtbl.hash n; add ";\n") ns;
-      List.iter inner ns
+      List.iter (fun n -> add "  "; add current; add " -> "; add @@ string_of_int @@ node_id (Lazy.force n); add ";\n") ns;
+      List.iter (fun n -> inner (Lazy.force n)) ns
     in
-    add "  \""; add current; add "\" [";
     match node with
-    | Var     x         -> add "label=\"Var ("; add x; add ")\"];\n"
-    | Ctor   (c, ns)    -> add "label=\"Ctor ("; add c; add ")\"];\n"; add_edges ns
-    | Unfold (e, n)     -> add "label=\"Unfold ("; add (String.escaped (show(Expr.t) @@ Lazy.force e)); add ")\"];\n"; add_edges [n]
-    | Assume (e, x, ns) -> add "label=\"Assume ("; add (String.escaped (show(Expr.t) @@ Lazy.force e)); add ", "; add x; add ")\"];\n"; add_edges ns
+    | Var     x         -> add "  \""; add current; add "\" [label=\"Var ("; add x; add ")\"];\n"
+    | Ctor   (c, ns)    -> add "  \""; add current; add "\" [label=\"Ctor ("; add c; add ")\"];\n"; add_edges ns
+    | Unfold (e, n)     -> add "  \""; add current; add "\" [label=\"Unfold ("; add (String.escaped (show(Expr.t) @@ Lazy.force e)); add ")\"];\n"; add_edges [n]
+    | Assume (e, x, ns) -> add "  \""; add current; add "\" [label=\"Assume ("; add (String.escaped (show(Expr.t) @@ Lazy.force e)); add ", "; add x; add ")\"];\n"; add_edges ns
+    | Rename (e, n)     -> add "  \""; add current; add "\" [label=\"Rename ("; add (String.escaped (show(Expr.t) @@ Lazy.force e)); add ")\"];\n";
+                           add "  "; add current; add " -> "; add @@ string_of_int @@ node_id n; add ";\n"
   in
   add "digraph g {\n";
   add "  node [shape=box];\n";
